@@ -349,6 +349,9 @@ canvas { width:100%; height:100%; display:block; touch-action:manipulation; }
     <button id="helpBtn" class="miniBtn">HELP</button>
   </div>
 
+
+  <div id="assetStatus" style="position:absolute;left:12px;bottom:78px;z-index:60;max-width:calc(100% - 24px);padding:10px 12px;border-radius:14px;background:rgba(0,0,0,.58);border:1px solid rgba(255,255,255,.18);font:800 13px/1.5 system-ui;color:#fff8ee;display:none;"></div>
+
   <div id="hudPads">
     <div class="pad">D</div><div class="pad">F</div><div class="pad">J</div><div class="pad">K</div>
   </div>
@@ -361,7 +364,7 @@ canvas { width:100%; height:100%; display:block; touch-action:manipulation; }
       <div class="logoShadow"></div>
       <div class="logoSticker right">VISUAL UP!</div>
     </div>
-    <p class="heroSub">ロゴ演出と画面のご褒美感を足して、ノーツも統一デザインに寄せた磨き込み版。背景演出、カットイン、ポーズ差分つきで、ポップな仮BGMつきで、そのまま遊べる。</p>
+    <p class="heroSub">ロゴ演出と画面のご褒美感を足して、ノーツも統一デザインに寄せた磨き込み版。背景演出、カットイン、ポーズ差分つきで、そのまま遊べる。</p>
     <div class="btnRow">
       <button id="startBtn" class="btn">START</button>
       <button id="tutorialBtn" class="btn alt">TUTORIAL</button>
@@ -434,10 +437,62 @@ canvas { width:100%; height:100%; display:block; touch-action:manipulation; }
     idle:'assets/kaho_asset_01_8f5dd911.png', dash:'assets/kaho_asset_02_6b1adc1e.png', jump:'assets/kaho_asset_03_353dfe30.png', victory:'assets/kaho_asset_04_80355ffc.png', spray:'assets/kaho_asset_05_49b7ea25.png',
     happy_cutin:'assets/kaho_asset_06_9c350107.png', focused_cutin:'assets/kaho_asset_07_2d6d5d14.png', spray_cutin:'assets/kaho_asset_08_a7745bd2.png', fever_cutin:'assets/kaho_asset_09_04e09cfe.png'
   };
+  const assetStatus = document.getElementById('assetStatus');
+  let assetsReady = false;
+  let assetFailures = [];
+
   for (const [k,v] of Object.entries(srcMap)) {
     const im = new Image();
+    im.decoding = 'async';
+    im.loading = 'eager';
+    im.onload = () => {
+      const loaded = Object.values(imgs).filter(i => i.complete && i.naturalWidth).length;
+      if (assetStatus && !assetsReady) {
+        assetStatus.style.display = 'block';
+        assetStatus.textContent = `画像読み込み中... ${loaded}/${Object.keys(srcMap).length}`;
+      }
+    };
+    im.onerror = () => {
+      assetFailures.push(k);
+      if (assetStatus) {
+        assetStatus.style.display = 'block';
+        assetStatus.textContent = `画像の読み込みに失敗: ${assetFailures.join(', ')}。assetsフォルダの配置を確認してください。`;
+      }
+    };
     im.src = v;
     imgs[k] = im;
+  }
+
+  function imageReady(img) {
+    return img && img.complete && img.naturalWidth > 0;
+  }
+
+  function allAssetsLoaded() {
+    return Object.values(imgs).every(imageReady);
+  }
+
+  function showAssetStatus(message, persistent=false) {
+    if (!assetStatus) return;
+    assetStatus.style.display = 'block';
+    assetStatus.textContent = message;
+    if (!persistent) setTimeout(() => { if (assetStatus) assetStatus.style.display = 'none'; }, 1200);
+  }
+
+  function updateAssetReadiness() {
+    if (assetsReady) return true;
+    const total = Object.keys(srcMap).length;
+    const loaded = Object.values(imgs).filter(imageReady).length;
+    if (loaded === total) {
+      assetsReady = true;
+      showAssetStatus('画像読み込み完了', false);
+      return true;
+    }
+    if (assetFailures.length) {
+      showAssetStatus(`画像の読み込みに失敗: ${assetFailures.join(', ')}。assetsフォルダがindex.htmlと同じ階層にあるか確認してください。`, true);
+    } else {
+      showAssetStatus(`画像読み込み中... ${loaded}/${total}`, true);
+    }
+    return false;
   }
 
   let W=390, H=844, DPR=1;
@@ -475,9 +530,9 @@ canvas { width:100%; height:100%; display:block; touch-action:manipulation; }
   let schedulerStarted = false;
   let nextBeatTime = 0;
   let step16 = 0;
-  const bpm = 132;
+  const bpm = 128;
   const beatDur = 60 / bpm;
-  const chordProg = [293.66, 369.99, 246.94, 392.00]; // D, F#, Bm, G neon-pop loop
+  const chordProg = [261.63, 293.66, 329.63, 392.00];
 
   function resize() {
     const rect = wrap.getBoundingClientRect();
@@ -538,131 +593,60 @@ canvas { width:100%; height:100%; display:block; touch-action:manipulation; }
     src.connect(biq); biq.connect(g); g.connect(fxGain); src.start(start);
   }
 
-  function synth(freq, start, dur, type='sawtooth', vol=.035, target=musicGain, filterFreq=1600) {
-    if (!audioEnabled || !audioCtx || !target) return;
-    const o1 = audioCtx.createOscillator();
-    const o2 = audioCtx.createOscillator();
-    const filter = audioCtx.createBiquadFilter();
-    const gain = audioCtx.createGain();
-    o1.type = type;
-    o2.type = type === 'sawtooth' ? 'triangle' : type;
-    o1.frequency.value = freq;
-    o2.frequency.value = freq * 1.005;
-    filter.type = 'lowpass';
-    filter.frequency.setValueAtTime(filterFreq, start);
-    filter.frequency.exponentialRampToValueAtTime(Math.max(240, filterFreq*.42), start + dur);
-    gain.gain.setValueAtTime(0.0001, start);
-    gain.gain.exponentialRampToValueAtTime(vol, start + .012);
-    gain.gain.exponentialRampToValueAtTime(0.0001, start + dur);
-    o1.connect(filter); o2.connect(filter); filter.connect(gain); gain.connect(target);
-    o1.start(start); o2.start(start);
-    o1.stop(start + dur + .04); o2.stop(start + dur + .04);
-  }
-
-  function popKick(start) {
+  function kick(start) {
     if (!audioEnabled || !audioCtx || !musicGain) return;
     const o = audioCtx.createOscillator();
     const g = audioCtx.createGain();
     o.type = 'sine';
-    o.frequency.setValueAtTime(170, start);
-    o.frequency.exponentialRampToValueAtTime(48, start + .16);
+    o.frequency.setValueAtTime(150, start);
+    o.frequency.exponentialRampToValueAtTime(45, start + 0.18);
     g.gain.setValueAtTime(0.0001, start);
-    g.gain.exponentialRampToValueAtTime(.23, start + .006);
-    g.gain.exponentialRampToValueAtTime(.0001, start + .20);
-    o.connect(g); g.connect(musicGain); o.start(start); o.stop(start + .22);
+    g.gain.exponentialRampToValueAtTime(0.18, start + 0.005);
+    g.gain.exponentialRampToValueAtTime(0.0001, start + 0.18);
+    o.connect(g); g.connect(musicGain); o.start(start); o.stop(start + 0.2);
   }
 
-  function popSnare(start) {
-    noise(start, .10, .035);
-    osc(220, start, .08, 'triangle', .020, musicGain);
-    osc(440, start + .018, .05, 'triangle', .012, musicGain);
-  }
-
-  function popHat(start, open=false) {
-    noise(start, open ? .08 : .026, open ? .016 : .010);
-  }
-
-  function clap(start) {
-    noise(start, .06, .018);
-    noise(start + .028, .05, .014);
-  }
-
-  function bassNote(freq, start, dur=.18, vol=.045) {
-    synth(freq, start, dur, 'square', vol, musicGain, 520);
-  }
-
-  function leadNote(freq, start, dur=.14, vol=.026) {
-    synth(freq, start, dur, 'sawtooth', vol, musicGain, 2300);
-    osc(freq*2, start + .005, Math.min(.08, dur*.8), 'triangle', vol*.35, musicGain);
-  }
-
-  function chordStab(root, start, dur=.18, vol=.020) {
-    const intervals = [0, 4, 7, 11];
-    intervals.forEach((semi, i) => synth(root * Math.pow(2, semi/12), start + i*.006, dur, 'triangle', vol*.72, musicGain, 1800));
-  }
-
-  function sparkle(root, start) {
-    [12, 16, 19].forEach((semi, i) => osc(root * Math.pow(2, semi/12), start + i*.035, .10, 'triangle', .014, musicGain));
-  }
-
+  function snare(start) { noise(start, .09, .03); osc(220, start, .08, 'triangle', .015, musicGain); }
+  function hat(start) { noise(start, .03, .012); }
   function playHit(perf) {
     if (!audioCtx) return;
     const t = audioCtx.currentTime;
-    osc(perf ? 987.77 : 739.99, t, .055, 'triangle', perf ? .055 : .036, fxGain);
-    osc(perf ? 1479.98 : 1108.73, t + .018, .045, 'square', perf ? .026 : .018, fxGain);
+    osc(perf ? 880 : 660, t, .06, 'triangle', perf ? .06 : .04, fxGain);
+    osc(perf ? 1320 : 990, t + .02, .05, 'square', perf ? .03 : .02, fxGain);
   }
-  function playMiss() { if (!audioCtx) return; osc(174.61, audioCtx.currentTime, .18, 'sawtooth', .020, fxGain); }
+  function playMiss() { if (!audioCtx) return; osc(180, audioCtx.currentTime, .18, 'sawtooth', .02, fxGain); }
   function playBurst() {
     if (!audioCtx) return;
     const t = audioCtx.currentTime;
-    [587.33,739.99,880,1174.66,1479.98].forEach((f,i)=>osc(f, t + i*0.035, .18, 'triangle', .045, fxGain));
-    noise(t, .14, .026);
+    [523.25,659.25,783.99,1046.5].forEach((f,i)=>osc(f, t + i*0.04, .16, 'triangle', .05, fxGain));
+    noise(t, .12, .025);
   }
 
   function scheduleMusic() {
     if (!schedulerStarted || !audioCtx) return;
-    const stepDur = beatDur / 4; // 16分音符
-    while (audioCtx.currentTime + .16 > nextBeatTime) {
-      const step = step16 % 16;
-      const bar = Math.floor(step16 / 16);
-      const root = chordProg[bar % chordProg.length];
+    while (audioCtx.currentTime + .12 > nextBeatTime) {
+      const beat = Math.floor(step16 / 4);
+      const bar = Math.floor(beat / 4);
+      const chord = chordProg[bar % chordProg.length];
+      const sub = step16 % 4;
       const songPhase = elapsed < 18 ? 0 : elapsed < 38 ? 1 : elapsed < 58 ? 2 : 3;
-      const fever = feverUntil > elapsed;
-      const extra = fever ? .012 : 0;
-
-      // Drums: bright four-on-the-floor electro-pop
-      if (step === 0 || step === 8) popKick(nextMusicTick);
-      if (step === 4 || step === 12) { popSnare(nextMusicTick); if (songPhase >= 2) clap(nextMusicTick + .018); }
-      if (step % 2 === 0) popHat(nextMusicTick, songPhase >= 2 && step === 14);
-      if (songPhase >= 1 && (step === 3 || step === 7 || step === 11 || step === 15)) popHat(nextMusicTick, false);
-
-      // Bouncy bass
-      const bassPattern = [0, 0, 7, 0, 12, 7, 0, 7, 0, 0, 7, 0, 12, 14, 12, 7];
-      if ([0,2,4,6,8,10,12,14].includes(step)) {
-        const semi = bassPattern[step];
-        bassNote(root/2 * Math.pow(2, semi/12), nextMusicTick, step === 12 ? .24 : .16, .040 + songPhase*.006 + extra);
+      const bass = chord / 2;
+      const melodySeq = [0,2,4,7,9,7,4,2, 4,5,7,9,7,5,4,2];
+      const scale = [1,1.1225,1.2599,1.4983,1.6818,1.8877,2];
+      const melIdx = melodySeq[step16 % melodySeq.length] % scale.length;
+      const mel = chord * scale[melIdx];
+      if (sub === 0) kick(nextBeatTime);
+      if (sub === 2) snare(nextBeatTime);
+      if (songPhase >= 1) hat(nextBeatTime + beatDur/2);
+      if (songPhase >= 2) hat(nextBeatTime + beatDur*0.75);
+      osc(bass, nextBeatTime, .24, 'square', .020 + songPhase*.006, musicGain);
+      osc(mel, nextBeatTime + beatDur/2, .15, songPhase >= 2 ? 'sawtooth' : 'triangle', .018 + songPhase*.006, musicGain);
+      if (songPhase >= 3) osc(chord * 2, nextBeatTime + beatDur*.25, .08, 'triangle', .018, musicGain);
+      if (feverUntil > elapsed) {
+        osc(chord * 2.5, nextBeatTime + beatDur*.125, .08, 'square', .02, musicGain);
       }
-
-      // Chord stabs on upbeat
-      if (step === 2 || step === 10 || (songPhase >= 2 && step === 6)) {
-        chordStab(root, nextMusicTick, .16, .017 + songPhase*.003 + extra);
-      }
-
-      // Pop melody hook, step-based so it feels like a song rather than random beeps
-      const hook = [0, 4, 7, 9, 7, 4, 2, 0, 7, 9, 12, 11, 9, 7, 4, 2,
-                    4, 7, 9, 12, 14, 12, 9, 7, 4, 2, 0, 2, 4, 7, 9, 12];
-      const hookIndex = (step16 + bar*2) % hook.length;
-      if (step % 2 === 1 || (songPhase >= 2 && step % 4 === 0)) {
-        const semi = hook[hookIndex];
-        leadNote(root * Math.pow(2, semi/12), nextMusicTick, .12, .020 + songPhase*.004 + extra);
-      }
-
-      // Fever adds upper sparkle and a little arcade shine
-      if (fever && (step === 1 || step === 5 || step === 9 || step === 13)) sparkle(root, nextMusicTick);
-      if (songPhase >= 3 && step === 15) sparkle(root, nextMusicTick);
-
-      nextMusicTick += stepDur;
-      step16 += 1;
+      nextBeatTime += beatDur;
+      step16 += 4;
     }
   }
 
@@ -768,6 +752,7 @@ canvas { width:100%; height:100%; display:block; touch-action:manipulation; }
   }
 
   function startGame() {
+    if (!updateAssetReadiness()) return;
     resetGame();
     initAudio();
     running = true;
@@ -1184,7 +1169,7 @@ canvas { width:100%; height:100%; display:block; touch-action:manipulation; }
   }
 
   function drawHeroBackdrop(t) {
-    if (!imgs.idle.complete) return;
+    if (!imgs.idle.complete || !imgs.idle.naturalWidth) return;
     const img = imgs.idle;
     const ratio = img.width / img.height;
     const w = Math.min(W*.36, H*.22 * ratio + 24);
@@ -1459,7 +1444,20 @@ canvas { width:100%; height:100%; display:block; touch-action:manipulation; }
 
   function drawActor(t) {
     const img = imgs[actor.state] || imgs.idle;
-    if (!img.complete) return;
+    if (!img || !img.complete || !img.naturalWidth) {
+      ctx.save();
+      ctx.fillStyle = 'rgba(255,217,26,.92)';
+      ctx.strokeStyle = '#111';
+      ctx.lineWidth = 5;
+      drawRounded(actor.x - 58, actor.y - 58, 116, 116, 28, true, true);
+      ctx.fillStyle = '#111';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.font = '1000 18px system-ui';
+      ctx.fillText('KAHO', actor.x, actor.y);
+      ctx.restore();
+      return;
+    }
     const pulse = 1 + Math.sin(t*4.6)*.015 + actor.hop*.08;
     const wBase = W*.48;
     const ratio = img.width / img.height;
@@ -1630,6 +1628,7 @@ canvas { width:100%; height:100%; display:block; touch-action:manipulation; }
   }
 
   function drawStartBackdrop(t) {
+    updateAssetReadiness();
     drawBackground(t);
     actor.state = ['idle','spray','jump','victory'][Math.floor(t*.7)%4];
     actor.mood = ['COOL','STYLE','HYPE','HAPPY'][Math.floor(t*.7)%4];
